@@ -472,8 +472,8 @@ class CountedCondition(CountedLock):
         self.wait_count = 0
         self.notify_count = 0
 
-    # only wait_for() and notify_all() are currently used, but wait()
-    # and notify() are also required according to the docs...
+    # wait(), wait_for() and notify_all() are currently used, but
+    # notify() is also required according to the docs...
 
     def wait(self, timeout=None):
         self.wait_count += 1

@@ -3,9 +3,11 @@ import time
 import unittest
 from typing import Any
 
-from cachetools import LRUCache, cached, cachedmethod
+from cachetools import Cache, LRUCache, cached, cachedmethod
 
 count = 0
+
+zero_size_count = 0
 
 
 @cached(cache=LRUCache(1), condition=threading.Condition(), info=True)
@@ -14,6 +16,14 @@ def func():
     time.sleep(1.0)
     count += 1
     return count
+
+
+@cached(cache=Cache(0), condition=threading.Condition(), info=True)
+def zero_size_func():
+    global zero_size_count
+    time.sleep(0.1)
+    zero_size_count += 1
+    return 42
 
 
 @cached(cache=LRUCache(1), lock=threading.Lock(), info=True)
@@ -66,6 +76,30 @@ class ThreadingTest(unittest.TestCase):
         info = func.cache_info()
         self.assertEqual(info.hits, self.NTHREADS - 1)
         self.assertEqual(info.misses, 1)
+
+    def test_cached_zero_size_stampede(self):
+        # even with a zero-size cache that cannot store any value,
+        # concurrent calls for the same key must share the result of
+        # a single computation
+        global zero_size_count
+        zero_size_count = 0
+        zero_size_func.cache_clear()
+        threads = [
+            threading.Thread(target=zero_size_func) for i in range(self.NTHREADS)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=self.TIMEOUT)
+            self.assertFalse(t.is_alive())
+
+        self.assertEqual(zero_size_count, 1)
+
+        info = zero_size_func.cache_info()
+        self.assertEqual(info.hits, self.NTHREADS - 1)
+        self.assertEqual(info.misses, 1)
+        self.assertEqual(info.maxsize, 0)
+        self.assertEqual(info.currsize, 0)
 
     def test_cachedmethod_stampede(self):
         self.cache = LRUCache(1)

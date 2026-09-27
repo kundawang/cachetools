@@ -1,3 +1,12 @@
+Unreleased
+==========
+
+- Fix cache stampede with ``condition`` when the computed value
+  cannot be stored in the cache, e.g. with a zero-size cache.  The
+  result of the single computation is now handed off to threads
+  waiting for the same key.
+
+
 v7.2.0 (2026-09-16)
 ===================
 

@@ -1,3 +1,5 @@
+import threading
+import time
 import unittest
 from collections.abc import Callable
 from typing import Any
@@ -108,6 +110,38 @@ class DecoratorTestMixin(_TestCaseProtocol):
         cached(RecursiveEquals(True))
         # Then do a call which will cause a deadlock with a non-reentrant lock.
         self.assertEqual(cached(RecursiveEquals(True)), RecursiveEquals(True))
+
+    def test_decorator_concurrent_same_key(self):
+        # concurrent calls for the same key must result in a single
+        # computation, even if the computed value cannot be cached
+        nthreads = 8
+        for maxsize in (0, 2, None):
+            with self.subTest(maxsize=maxsize):
+                calls = []
+                results = []
+                barrier = threading.Barrier(nthreads)
+
+                def func(n):
+                    time.sleep(0.1)
+                    calls.append(n)
+                    return n * 2
+
+                def target():
+                    barrier.wait(timeout=10)
+                    results.append(cached(1))
+
+                cached = self.decorator(maxsize=maxsize)(func)
+                threads = [threading.Thread(target=target) for _ in range(nthreads)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(timeout=10)
+                    self.assertFalse(t.is_alive())
+
+                self.assertEqual(calls, [1])
+                self.assertEqual(results, [2] * nthreads)
+                self.assertEqual(cached.cache_info().misses, 1)
+                self.assertEqual(cached.cache_info().hits, nthreads - 1)
 
 
 class FIFODecoratorTest(unittest.TestCase, DecoratorTestMixin):

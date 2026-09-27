@@ -13,31 +13,47 @@ import warnings
 
 def _condition_info(func, cache, key, lock, cond, info):
     hits = misses = 0
-    pending = set()
+    pending = {}
 
     def wrapper(*args, **kwargs):
         nonlocal hits, misses
         k = key(*args, **kwargs)
         with lock:
-            cond.wait_for(lambda: k not in pending)
-            try:
-                result = cache[k]
-                hits += 1
-                return result
-            except KeyError:
-                pending.add(k)
-                misses += 1
+            while True:
+                flight = pending.get(k)
+                if flight is None:
+                    try:
+                        result = cache[k]
+                        hits += 1
+                        return result
+                    except KeyError:
+                        # this thread computes the value for this key
+                        pending[k] = flight = []
+                        misses += 1
+                        break
+                elif flight:
+                    # another thread computed this key, but the value
+                    # could not be stored in the cache
+                    hits += 1
+                    return flight[0]
+                # wait for another thread computing this key
+                cond.wait()
+                if flight:
+                    hits += 1
+                    return flight[0]
         try:
             v = func(*args, **kwargs)
             with lock:
                 try:
                     cache[k] = v
                 except ValueError:
-                    pass  # value too large
+                    # value too large to cache, hand it off to
+                    # threads waiting for this key
+                    flight.append(v)
                 return v
         finally:
             with lock:
-                pending.remove(k)
+                del pending[k]
                 cond.notify_all()
 
     def cache_clear():
@@ -143,28 +159,41 @@ def _uncached_info(func, info):
 
 
 def _condition(func, cache, key, lock, cond):
-    pending = set()
+    pending = {}
 
     def wrapper(*args, **kwargs):
         k = key(*args, **kwargs)
         with lock:
-            cond.wait_for(lambda: k not in pending)
-            try:
-                result = cache[k]
-                return result
-            except KeyError:
-                pending.add(k)
+            while True:
+                flight = pending.get(k)
+                if flight is None:
+                    try:
+                        return cache[k]
+                    except KeyError:
+                        # this thread computes the value for this key
+                        pending[k] = flight = []
+                        break
+                elif flight:
+                    # another thread computed this key, but the value
+                    # could not be stored in the cache
+                    return flight[0]
+                # wait for another thread computing this key
+                cond.wait()
+                if flight:
+                    return flight[0]
         try:
             v = func(*args, **kwargs)
             with lock:
                 try:
                     cache[k] = v
                 except ValueError:
-                    pass  # value too large
+                    # value too large to cache, hand it off to
+                    # threads waiting for this key
+                    flight.append(v)
                 return v
         finally:
             with lock:
-                pending.remove(k)
+                del pending[k]
                 cond.notify_all()
 
     def cache_clear():
